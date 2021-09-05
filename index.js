@@ -6,6 +6,7 @@ const { JSDOM } = jsdom;
 const PrettyTable = require('prettytable');
 const dotenv = require('dotenv');
 
+
 dotenv.config()
 const token = process.env.TOKEN || "";
 
@@ -19,6 +20,16 @@ const directions = {
         inline_keyboard: [
             [{text: "Тарасівка - Київ", callback_data: 'tarasovka-kyiv'},],
             [{text: "Київ - Тарасівка", callback_data: 'kyiv-tarasovka'}],
+        ]
+    })
+}
+
+const directions_now = {
+    parse_mode: 'HTML',
+    reply_markup: JSON.stringify({
+        inline_keyboard: [
+            [{text: "Тарасівка - Київ", callback_data: 'tarasovka-kyiv_now'},],
+            [{text: "Київ - Тарасівка", callback_data: 'kyiv-tarasovka_now'}],
         ]
     })
 }
@@ -59,7 +70,7 @@ const parseData = (table) => {
             "route": `${shortRoute(routeFrom)}-${shortRoute(routeTo)}`,
             "departure": cells[3].getElementsByClassName("_time")[0].textContent,
             "arrivals": cells[4].getElementsByClassName("_time")[0].textContent,
-            "all_day": holiday_img === "/img/chart1.png" ? "Усі дні" : "Окрім вихідних",
+            "all_day": holiday_img === "/img/chart1.png",
         })
     }
 
@@ -91,7 +102,7 @@ const sendRozklad = async (chatId, table, route) => {
         //     pt.addRow([item["route"], item["departure"], item["arrivals"]]);
         // }
 
-        let item_route = item["all_day"]==="Окрім вихідних" ? item["route"] + "*" : item["route"]
+        let item_route = item["all_day"] ? item["route"] : item["route"] + "*"
 
         pt.addRow([item_route, item["departure"], item["arrivals"]]);
 
@@ -105,6 +116,61 @@ const sendRozklad = async (chatId, table, route) => {
 
 }
 
+const checkHoursDiff = (dep, now) => {
+    d1 = new Date(dep);
+    d2 = new Date(now);
+
+    return d1.getHours() - d2.getHours() <= 1;
+}
+
+const checkWeekends = (now, flag) => {
+    d2 = new Date(now).getDay();
+    return (d2 !== 0 && d2 !== 6) ? true : flag;
+}
+
+const sendNow = async (chatId, table, route) => {
+
+    pt = new PrettyTable();
+
+    pt.fieldNames(["Маршрут", "Відп.", "Приб."]);
+
+    if (rozklad_msg_id!==''){
+        bot.deleteMessage(chatId, rozklad_msg_id)
+    }
+
+    let rozklad = `Найближчі електропоїзди у напрямку <b>${route}</b>:\n`;
+    const obj = parseData(table);
+    let is_found = false;
+    obj.map( item => {
+        const date = new Date();
+        const dangqian=date.toLocaleTimeString('chinese',{hour12:false})
+        const dq=dangqian.split(":");
+        const a = item["departure"].split(".");
+
+        const date_now=date.setHours(dq[0],dq[1]);
+        const date_dep=date.setHours(a[0],a[1]);
+
+        if (date_dep > date_now &&
+            checkHoursDiff(date_dep, date_now) &&
+            checkWeekends(date_now, item["all_day"])
+        ){
+            pt.addRow([item["route"], item["departure"], item["arrivals"]]);
+            is_found = true;
+        }
+
+    });
+
+    if (is_found){
+        rozklad += `<pre>${pt.toString()}</pre>`;
+        let msg = await bot.sendMessage(chatId, rozklad, {parse_mode: 'HTML'});
+        rozklad_msg_id = msg.message_id;
+    }else {
+        let msg = await bot.sendMessage(chatId, "Наступної години електропоїздів немає :(");
+        rozklad_msg_id = msg.message_id;
+    }
+
+
+}
 
 const start = () => {
     bot.setMyCommands([
@@ -129,7 +195,7 @@ const start = () => {
         }
 
         if (text === "/now" || text === "/now@ElectricTrainSchedule_Bot"){
-            return bot.sendMessage(chatId, `У розробці . . .`);
+            return bot.sendMessage(chatId, `Вибери напрямок нижче:`, directions_now);
         }
 
         return bot.sendMessage(chatId, `Я тебе не розумію, спробуй ще раз)`);
@@ -151,6 +217,20 @@ const start = () => {
             getHtml('https://poizdato.net/rozklad-poizdiv/kyiv-pas--tarasivka,kyivska-obl/')
                 .then((table) => {
                     sendRozklad(chatId, table, "Київ - Тарасівка")
+                });
+        }
+
+        if (data === 'tarasovka-kyiv_now'){
+            getHtml('https://poizdato.net/rozklad-poizdiv/tarasivka,kyivska-obl--kyiv-pas/')
+                .then((table) => {
+                    sendNow(chatId, table, "Тарасівка - Київ")
+                });
+        }
+
+        if (data === 'kyiv-tarasovka_now'){
+            getHtml('https://poizdato.net/rozklad-poizdiv/kyiv-pas--tarasivka,kyivska-obl/')
+                .then((table) => {
+                    sendNow(chatId, table, "Київ - Тарасівка")
                 });
         }
     })
